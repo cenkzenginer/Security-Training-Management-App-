@@ -1,96 +1,82 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
+//const mariadb = require('mariadb');
 require('dotenv').config();
+const sql = require('mssql');
 
-// Veritabanı tipine göre modül yükle
-const DB_TYPE = process.env.DB_TYPE || 'mariadb';
-
+// --------------------
+// MariaDB Connection Pool
+// --------------------
 let pool = null;
 let isPoolClosed = false;
 
-if (DB_TYPE === 'mariadb') {
-  // MariaDB kullan
-  const mariadb = require('mariadb');
-  
-  function createPool() {
-    if (!pool && !isPoolClosed) {
-      pool = mariadb.createPool({
-        host: process.env.MARIADB_HOST || 'localhost',
-        user: process.env.MARIADB_USER || 'root',
-        password: process.env.MARIADB_PASSWORD || 'root',
-        database: process.env.MARIADB_DATABASE || 'pergamon',
-        connectionLimit: 20
-      });
-      console.log('✅ MariaDB pool oluşturuldu (LOCAL)');
-    }
-    return pool;
+// Azure SQL Configuration
+const azureConfig = {
+  server: process.env.AZURE_SQL_SERVER || 'pergamon.database.windows.net',
+  database: process.env.AZURE_SQL_DATABASE || 'pergamon',
+  user: process.env.AZURE_SQL_USER || 'pergamonadmin',
+  password: process.env.AZURE_SQL_PASSWORD || 'Pergamon123.',
+  port: 1433,
+  options: {
+    encrypt: true,
+    trustServerCertificate: false,
+    enableArithAbort: true,
+    connectionTimeout: 30000,
+    requestTimeout: 30000
+  },
+  pool: {
+    max: 20,
+    min: 0,
+    idleTimeoutMillis: 30000
   }
-  
-  async function runQuery(query, params = []) {
-    let conn;
+};
+
+async function createPool() {
+  if (!pool && !isPoolClosed) {
     try {
-      const currentPool = createPool();
-      conn = await currentPool.getConnection();
-      const rows = await conn.query(query, params);
-      return rows;
-    } catch (err) {
-      console.error("❌ MariaDB hatası:", err);
-      return { error: err.message };
-    } finally {
-      if (conn) conn.release();
-    }
-  }
-  
-} else if (DB_TYPE === 'azure') {
-  // Azure SQL kullan
-  const sql = require('mssql');
-  
-  const sqlConfig = {
-    server: process.env.AZURE_SQL_SERVER,
-    database: process.env.AZURE_SQL_DATABASE,
-    user: process.env.AZURE_SQL_USER,
-    password: process.env.AZURE_SQL_PASSWORD,
-    port: parseInt(process.env.AZURE_SQL_PORT || '1433'),
-    options: {
-      encrypt: true,
-      trustServerCertificate: false,
-      enableArithAbort: true
-    },
-    pool: { max: 10, min: 0 }
-  };
-  
-  async function createPool() {
-    if (!pool && !isPoolClosed) {
-      try {
-        pool = await sql.connect(sqlConfig);
-        console.log('✅ Azure SQL pool oluşturuldu (CLOUD)');
-      } catch (err) {
-        console.error('❌ Azure SQL hatası:', err);
-        throw err;
-      }
-    }
-    return pool;
-  }
-  
-  async function runQuery(query, params = []) {
-    try {
-      const currentPool = await createPool();
-      const request = currentPool.request();
+      pool = await sql.connect(azureConfig);
+      console.log('📊 Azure SQL Database pool oluşturuldu');
       
-      // Parametreleri ekle
-      params.forEach((param, index) => {
-        request.input(`param${index}`, param);
+      pool.on('error', err => {
+        console.error('❌ Azure SQL Pool hatası:', err);
+        pool = null;
       });
       
-      // ? -> @param0, @param1 dönüşümü
-      let paramIndex = 0;
-      const convertedQuery = query.replace(/\?/g, () => `@param${paramIndex++}`);
-      
-      const result = await request.query(convertedQuery);
-      return result.recordset || [];
+      return pool;
     } catch (err) {
-      console.error("❌ Azure SQL hatası:", err);
-      return { error: err.message };
+      console.error('❌ Azure SQL bağlantı hatası:', err);
+      throw err;
+    }
+  }
+  return pool;
+}
+
+async function testDBConnection() {
+  try {
+    const currentPool = await createPool();
+    const result = await currentPool.request().query('SELECT 1 as test');
+    console.log('✅ Azure SQL Database bağlantısı başarılı!');
+    return true;
+  } catch (err) {
+    console.error('❌ Azure SQL bağlantı hatası:', err);
+    return false;
+  }
+}
+
+async function closePool() {
+  if (pool && !isPoolClosed) {
+    try {
+      console.log('🔄 Pool kapatılıyor...');
+      await pool.close();  // ✅ Azure SQL methodu
+      isPoolClosed = true;
+      pool = null;
+      console.log('✅ Pool başarıyla kapatıldı');
+    } catch (error) {
+      console.error('❌ Pool kapatılırken hata:', error.message);
+      // Pool zaten kapalıysa, sadece durumu güncelle
+      isPoolClosed = true;
+      pool = null;
+      console.log('ℹ️ Pool durumu güncellendi');
     }
   }
 }
@@ -137,41 +123,67 @@ function createWindow() {
 // Genel Database Fonksiyonları
 // --------------------
 async function runQuery(query, params = []) {
-  let conn;
   try {
-    const currentPool = createPool();
+    const currentPool = await createPool();
 
     if (isPoolClosed) {
       throw new Error('Database pool is closed');
     }
 
-    conn = await currentPool.getConnection();
-
-    // Parametreleri logla (debug için)
     console.log('🔧 SQL Sorgusu çalıştırılıyor:', {
       query: query.substring(0, 100) + '...',
       paramCount: params.length,
       nullParams: params.filter(p => p === null).length
     });
 
-    const rows = await conn.query(query, params);
-    return rows;
+    // ⭐ AZURE SQL İÇİN QUERY DÖNÜŞÜMLERİ
+    let processedQuery = query;
+    
+    // DATE() -> CAST(... AS DATE)
+    processedQuery = processedQuery.replace(/DATE\(([^)]+)\)/gi, 'CAST($1 AS DATE)');
+    
+    // CURDATE() -> CAST(GETDATE() AS DATE)
+    processedQuery = processedQuery.replace(/CURDATE\(\)/gi, 'CAST(GETDATE() AS DATE)');
+    
+    // NOW() -> GETDATE()
+    processedQuery = processedQuery.replace(/NOW\(\)/gi, 'GETDATE()');
+    
+    // DATE_ADD(date, INTERVAL n DAY) -> DATEADD(DAY, n, date)
+    processedQuery = processedQuery.replace(
+      /DATE_ADD\(([^,]+),\s*INTERVAL\s+(\d+)\s+DAY\)/gi,
+      'DATEADD(DAY, $2, $1)'
+    );
+    
+    // DATE_SUB(date, INTERVAL n DAY) -> DATEADD(DAY, -n, date)
+    processedQuery = processedQuery.replace(
+      /DATE_SUB\(([^,]+),\s*INTERVAL\s+(\d+)\s+DAY\)/gi,
+      'DATEADD(DAY, -$2, $1)'
+    );
+
+    const request = currentPool.request();
+    
+    // Parametreleri ekle
+    params.forEach((param, index) => {
+      request.input(`param${index}`, param);
+    });
+    
+    // ? işaretlerini @param0, @param1 ile değiştir
+    params.forEach((_, index) => {
+      processedQuery = processedQuery.replace('?', `@param${index}`);
+    });
+
+    const result = await request.query(processedQuery);
+    return result.recordset || [];
+    
   } catch (err) {
     console.error("❌ SQL Hatası:", {
       message: err.message,
       code: err.code,
-      sqlState: err.sqlState,
-      sql: err.sql ? err.sql.substring(0, 200) + '...' : 'N/A'
+      number: err.number,
+      state: err.state,
+      query: query.substring(0, 200) + '...'
     });
     return { error: err.message };
-  } finally {
-    if (conn) {
-      try {
-        conn.release();
-      } catch (releaseError) {
-        console.error('Connection release hatası:', releaseError);
-      }
-    }
   }
 }
 
