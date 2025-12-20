@@ -257,8 +257,6 @@ Default admin credentials:
 4. Or use **Toplu Güncelle** for bulk updates
 5. Completion percentage updates automatically
 
-For detailed instructions, see the [User Manual](docs/user-manual.pdf).
-
 ## 📁 Project Structure
 ```
 Security-Training-Management-App/
