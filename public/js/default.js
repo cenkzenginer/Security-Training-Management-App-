@@ -135,7 +135,8 @@ function switchPage(pageId, termId = null) {
         if (pageId === 'terms') {
             renderTerms();
         } else if (pageId === 'dashboard') {
-            updateDashboardStats();
+            //updateDashboardStats();
+            loadDashboardData();
         }
         else if (pageId === 'payments') {
             loadPayments(); // Bu satırı ekleyin
@@ -149,6 +150,218 @@ function switchPage(pageId, termId = null) {
             loadNotificationsPage(); // Bildirim sayfasını yükle
         }
     }
+}
+
+// =============================================================================
+// DASHBOARD FONKSİYONLARI
+// =============================================================================
+
+async function loadDashboardData() {
+    try {
+        console.log('📊 Dashboard verileri yükleniyor...');
+        
+        // Veritabanından verileri çek - MEVCUT FONKSIYONLARI KULLAN
+        const donemler = await window.db.getDonemler();
+        
+        // Tüm öğrencileri topla
+        let allStudents = [];
+        for (const donem of donemler) {
+            const students = await window.db.getOgrencilerByDonem(donem.id);
+            allStudents = allStudents.concat(students);
+        }
+        
+        // Ödemeleri al (eğer varsa)
+        const payments = []; // Şimdilik boş, ödeme sistemi aktifse burası dolacak
+        
+        // İstatistikleri hesapla
+        updateDashboardStats(allStudents, donemler, payments);
+        
+        // Son aktiviteleri yükle
+        updateRecentActivities(allStudents, payments);
+        
+        // Uyarıları güncelle
+        updateDashboardAlerts(allStudents, donemler, payments);
+        
+        console.log('✅ Dashboard verileri yüklendi');
+    } catch (error) {
+        console.error('❌ Dashboard yükleme hatası:', error);
+        showNotification('Dashboard verileri yüklenirken hata oluştu', 'error');
+    }
+}
+
+function updateDashboardStats(students, donemler, payments) {
+    // Toplam öğrenci
+    const totalStudents = students.length;
+    document.querySelector('.stats-grid .stat-card:nth-child(1) .stat-value').textContent = totalStudents;
+    
+    // Bu ayki yeni öğrenciler
+    const thisMonth = new Date();
+    thisMonth.setDate(1);
+    const newStudentsThisMonth = students.filter(s => {
+        const createdDate = new Date(s.created_at || s.kayit_tarihi);
+        return createdDate >= thisMonth;
+    }).length;
+    
+    // Geçen ayki öğrenciler
+    const lastMonth = new Date(thisMonth);
+    lastMonth.setMonth(lastMonth.getMonth() - 1);
+    const lastMonthEnd = new Date(thisMonth);
+    lastMonthEnd.setDate(0);
+    const newStudentsLastMonth = students.filter(s => {
+        const createdDate = new Date(s.created_at || s.kayit_tarihi);
+        return createdDate >= lastMonth && createdDate <= lastMonthEnd;
+    }).length;
+    
+    // Yüzde değişim hesapla
+    const percentChange = lastMonthLastMonth > 0 
+        ? Math.round(((newStudentsThisMonth - newStudentsLastMonth) / newStudentsLastMonth) * 100)
+        : 100;
+    
+    const trendElement = document.querySelector('.stats-grid .stat-card:nth-child(1) .stat-trend');
+    if (percentChange >= 0) {
+        trendElement.className = 'stat-trend positive';
+        trendElement.innerHTML = `<i class="fas fa-trending-up"></i> +${percentChange}% bu ay`;
+    } else {
+        trendElement.className = 'stat-trend negative';
+        trendElement.innerHTML = `<i class="fas fa-trending-down"></i> ${percentChange}% bu ay`;
+    }
+    
+    // Aktif dönemler
+    const activeDonemler = donemler.filter(d => {
+        const today = new Date();
+        const start = new Date(d.baslangic_tarihi);
+        const end = new Date(d.bitis_tarihi);
+        return today >= start && today <= end;
+    }).length;
+    document.querySelector('.stats-grid .stat-card:nth-child(2) .stat-value').textContent = activeDonemler;
+    
+    // Yeni öğrenciler (son 30 gün)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentStudents = students.filter(s => {
+        const createdDate = new Date(s.created_at || s.kayit_tarihi);
+        return createdDate >= thirtyDaysAgo;
+    }).length;
+    document.querySelector('.stats-grid .stat-card:nth-child(3) .stat-value').textContent = recentStudents;
+    
+    // Bekleyen ödemeler
+    const pendingPayments = payments.filter(p => p.durum === 'Beklemede' || p.kalan_borc > 0);
+    const totalPending = pendingPayments.reduce((sum, p) => sum + (p.kalan_borc || 0), 0);
+    document.querySelector('.stats-grid .stat-card:nth-child(4) .stat-value').textContent = 
+        `${totalPending.toLocaleString('tr-TR')} ₺`;
+}
+
+function updateRecentActivities(students, payments) {
+    const activitiesList = document.querySelector('.activities-list');
+    if (!activitiesList) return;
+    
+    // Son aktiviteleri oluştur (son kayıtlar + ödemeler)
+    const activities = [];
+    
+    // Son 5 öğrenci kaydı
+    const recentStudents = [...students]
+        .sort((a, b) => new Date(b.created_at || b.kayit_tarihi) - new Date(a.created_at || a.kayit_tarihi))
+        .slice(0, 3);
+    
+    recentStudents.forEach(student => {
+        const timeAgo = getTimeAgo(new Date(student.created_at || student.kayit_tarihi));
+        activities.push({
+            type: 'enrollment',
+            name: `${student.ad} ${student.soyad}`,
+            description: 'Yeni kayıt',
+            time: timeAgo,
+            date: new Date(student.created_at || student.kayit_tarihi)
+        });
+    });
+    
+    // Son 5 ödeme
+    const recentPayments = [...payments]
+        .filter(p => p.odeme_tarihi)
+        .sort((a, b) => new Date(b.odeme_tarihi) - new Date(a.odeme_tarihi))
+        .slice(0, 3);
+    
+    recentPayments.forEach(payment => {
+        const student = students.find(s => s.id === payment.ogrenci_id);
+        if (student) {
+            const timeAgo = getTimeAgo(new Date(payment.odeme_tarihi));
+            activities.push({
+                type: 'payment',
+                name: `${student.ad} ${student.soyad}`,
+                description: `Ödeme yapıldı - ${payment.odenen_tutar} TL`,
+                time: timeAgo,
+                date: new Date(payment.odeme_tarihi)
+            });
+        }
+    });
+    
+    // Tarihe göre sırala ve ilk 5'i al
+    activities.sort((a, b) => b.date - a.date);
+    const topActivities = activities.slice(0, 5);
+    
+    // HTML'i oluştur
+    activitiesList.innerHTML = topActivities.map(activity => `
+        <div class="activity-item">
+            <div class="activity-dot ${activity.type}"></div>
+            <div class="activity-info">
+                <h4>${activity.name}</h4>
+                <p>${activity.description}</p>
+                <span>${activity.time}</span>
+            </div>
+        </div>
+    `).join('');
+}
+
+function updateDashboardAlerts(students, donemler, payments) {
+    // Geciken ödemeler
+    const overduePayments = payments.filter(p => {
+        if (!p.son_odeme_tarihi) return false;
+        const dueDate = new Date(p.son_odeme_tarihi);
+        const today = new Date();
+        return dueDate < today && (p.durum === 'Beklemede' || p.kalan_borc > 0);
+    });
+    
+    const uniqueStudentsWithOverdue = new Set(overduePayments.map(p => p.ogrenci_id)).size;
+    document.querySelector('.alert-card.danger .alert-value').textContent = 
+        `${uniqueStudentsWithOverdue} Öğrenci`;
+    
+    // Yakında biten dönemler (30 gün içinde)
+    const thirtyDaysLater = new Date();
+    thirtyDaysLater.setDate(thirtyDaysLater.getDate() + 30);
+    const endingSoon = donemler.filter(d => {
+        const endDate = new Date(d.bitis_tarihi);
+        const today = new Date();
+        return endDate > today && endDate <= thirtyDaysLater;
+    }).length;
+    
+    document.querySelector('.alert-card.warning .alert-value').textContent = `${endingSoon} Dönem`;
+    
+    // Bekleyen başvurular (eksik belgeli öğrenciler)
+    const pendingApplications = students.filter(s => {
+        // Eksik belge kontrolü - en az bir belge eksikse
+        const requiredDocs = ['kimlik', 'vesikalik', 'ikametgah', 'sabika', 'askerlik', 'saglik'];
+        return requiredDocs.some(doc => !s[`${doc}_belgesi`]);
+    }).length;
+    
+    document.querySelector('.alert-card.info .alert-value').textContent = `${pendingApplications} Başvuru`;
+}
+
+function getTimeAgo(date) {
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return 'Az önce';
+    if (diffMins < 60) return `${diffMins} dakika önce`;
+    if (diffHours < 24) return `${diffHours} saat önce`;
+    if (diffDays < 30) return `${diffDays} gün önce`;
+    
+    const diffMonths = Math.floor(diffDays / 30);
+    if (diffMonths < 12) return `${diffMonths} ay önce`;
+    
+    const diffYears = Math.floor(diffMonths / 12);
+    return `${diffYears} yıl önce`;
 }
 
 
