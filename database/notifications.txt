@@ -1,0 +1,52 @@
+CREATE TABLE [dbo].[bildirimler] (
+    [id]                INT            IDENTITY (1, 1) NOT NULL,
+    [baslik]            NVARCHAR (200) NOT NULL,
+    [mesaj]             NVARCHAR (MAX) NOT NULL,
+    [turu]              VARCHAR (20)   NOT NULL,
+    [oncelik]           VARCHAR (20)   DEFAULT ('bilgi') NOT NULL,
+    [okundu]            BIT            DEFAULT ((0)) NOT NULL,
+    [olusturma_tarihi]  DATETIME2 (7)  DEFAULT (sysdatetime()) NOT NULL,
+    [okunma_tarihi]     DATETIME2 (7)  NULL,
+    [ogr_id]            INT            NULL,
+    [donem_id]          INT            NULL,
+    [sinav_puan_tarihi] DATE           NULL,
+    [hedef_tarih]       DATE           NULL,
+    [bildirim_anahtari] NVARCHAR (255) NULL,
+    [aktif]             BIT            DEFAULT ((1)) NOT NULL,
+    PRIMARY KEY CLUSTERED ([id] ASC),
+    CHECK ([oncelik]='bilgi' OR [oncelik]='onemli' OR [oncelik]='acil'),
+    CHECK ([turu]='kimlik_suresi' OR [turu]='belge' OR [turu]='odeme' OR [turu]='egitim'),
+    CONSTRAINT [fk_bildirimler_donem] FOREIGN KEY ([donem_id]) REFERENCES [dbo].[donemler] ([id]) ON DELETE SET NULL,
+    CONSTRAINT [fk_bildirimler_ogr] FOREIGN KEY ([ogr_id]) REFERENCES [dbo].[ogrenciler] ([id]) ON DELETE SET NULL
+);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_tur_tarih]
+    ON [dbo].[bildirimler]([turu] ASC, [olusturma_tarihi] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_ogrenci]
+    ON [dbo].[bildirimler]([ogr_id] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_donem]
+    ON [dbo].[bildirimler]([donem_id] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_okundu]
+    ON [dbo].[bildirimler]([okundu] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_oncelik]
+    ON [dbo].[bildirimler]([oncelik] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_anahtar]
+    ON [dbo].[bildirimler]([bildirim_anahtari] ASC);
+

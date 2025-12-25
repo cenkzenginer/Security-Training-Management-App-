@@ -1,0 +1,11 @@
+CREATE TABLE [dbo].[donemler] (
+    [id]                INT           IDENTITY (1, 1) NOT NULL,
+    [donem_numara]      INT           NOT NULL,
+    [donem_turu]        NVARCHAR (50) DEFAULT ('') NOT NULL,
+    [donem_durum]       NVARCHAR (50) DEFAULT ('') NOT NULL,
+    [donem_ogr_adedi]   INT           DEFAULT ((0)) NOT NULL,
+    [donem_baslangic_t] DATE          NOT NULL,
+    [donem_bitis_t]     DATE          NOT NULL,
+    PRIMARY KEY CLUSTERED ([id] ASC)
+);
+
