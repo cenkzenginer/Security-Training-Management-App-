@@ -1,0 +1,47 @@
+CREATE TABLE [dbo].[odemeler] (
+    [id]               INT             IDENTITY (1, 1) NOT NULL,
+    [ogr_id]           INT             NOT NULL,
+    [odeme_turu]       VARCHAR (20)    DEFAULT ('taksit') NULL,
+    [odenen_tutar]     DECIMAL (10, 2) DEFAULT ((0.00)) NOT NULL,
+    [odeme_tarihi]     DATE            NOT NULL,
+    [son_odeme_tarihi] DATE            NULL,
+    [odeme_yontemi]    VARCHAR (20)    DEFAULT ('nakit') NULL,
+    [durum]            VARCHAR (20)    DEFAULT ('bekliyor') NULL,
+    [notlar]           NVARCHAR (MAX)  NULL,
+    [created_at]       DATETIME2 (7)   DEFAULT (sysdatetime()) NULL,
+    [updated_at]       DATETIME2 (7)   DEFAULT (sysdatetime()) NULL,
+    [taksit_no]        INT             DEFAULT ((1)) NULL,
+    [toplam_taksit]    INT             DEFAULT ((1)) NULL,
+    PRIMARY KEY CLUSTERED ([id] ASC),
+    CHECK ([durum]='geciken' OR [durum]='bekliyor' OR [durum]='odendi'),
+    CHECK ([odeme_turu]='taksit' OR [odeme_turu]='tam'),
+    CHECK ([odeme_yontemi]='havale' OR [odeme_yontemi]='kart' OR [odeme_yontemi]='nakit'),
+    CONSTRAINT [fk_odemeler_ogr] FOREIGN KEY ([ogr_id]) REFERENCES [dbo].[ogrenciler] ([id]) ON DELETE CASCADE
+);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_ogr_id]
+    ON [dbo].[odemeler]([ogr_id] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_durum]
+    ON [dbo].[odemeler]([durum] ASC);
+
+
+GO
+CREATE NONCLUSTERED INDEX [idx_odeme_tarihi]
+    ON [dbo].[odemeler]([odeme_tarihi] ASC);
+
+
+GO
+CREATE TRIGGER trg_odemeler_update
+ON odemeler
+AFTER UPDATE
+AS
+BEGIN
+    UPDATE odemeler
+    SET updated_at = SYSDATETIME()
+    WHERE id IN (SELECT id FROM inserted);
+END;
